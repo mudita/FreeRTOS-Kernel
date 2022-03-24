@@ -1,5 +1,5 @@
 /*
- * FreeRTOS Kernel <DEVELOPMENT BRANCH>
+ * FreeRTOS Kernel V10.4.6
  * Copyright (C) 2020 Cambridge Consultants Ltd.
  *
  * SPDX-License-Identifier: MIT
@@ -111,7 +111,6 @@ static void prvSuspendSelf( Thread_t * thread);
 static void prvResumeThread( Thread_t * xThreadId );
 static void vPortSystemTickHandler( int sig );
 static void vPortStartFirstTask( void );
-static void prvPortYieldFromISR( void );
 /*-----------------------------------------------------------*/
 
 static void prvFatalError( const char *pcCall, int iErrno )
@@ -268,7 +267,7 @@ void vPortExitCritical( void )
 }
 /*-----------------------------------------------------------*/
 
-static void prvPortYieldFromISR( void )
+void vPortYieldFromISR( void )
 {
 Thread_t *xThreadToSuspend;
 Thread_t *xThreadToResume;
@@ -287,7 +286,7 @@ void vPortYield( void )
 {
     vPortEnterCritical();
 
-    prvPortYieldFromISR();
+    vPortYieldFromISR();
 
     vPortExitCritical();
 }
@@ -562,4 +561,18 @@ struct tms xTimes;
 
     return ( unsigned long ) xTimes.tms_utime;
 }
+/*-----------------------------------------------------------*/
+
+BaseType_t xPortIsInsideInterrupt(void)
+{
+    return pdFALSE;
+}
+
+/*-----------------------------------------------------------*/
+
+uint32_t ulHighFrequencyTimerTicks(void){
+    return ulPortGetRunTime();
+}
+
+
 /*-----------------------------------------------------------*/

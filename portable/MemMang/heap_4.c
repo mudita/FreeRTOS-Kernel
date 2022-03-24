@@ -92,13 +92,37 @@
     PRIVILEGED_DATA static uint8_t ucHeap[ configTOTAL_HEAP_SIZE ];
 #endif /* configAPPLICATION_ALLOCATED_HEAP */
 
+/* Additional heap settings default values */
+#if !defined(configSYSTEM_HEAP_INTEGRITY_CHECK)
+#define configSYSTEM_HEAP_INTEGRITY_CHECK (0)
+#endif
+#if !defined(configSYSTEM_HEAP_STATS)
+#define configSYSTEM_HEAP_STATS (0)
+#endif
+
 /* Define the linked list structure.  This is used to link free blocks in order
  * of their memory address. */
 typedef struct A_BLOCK_LINK
 {
     struct A_BLOCK_LINK * pxNextFreeBlock; /*<< The next free block in the list. */
     size_t xBlockSize;                     /*<< The size of the free block. */
+#if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+    uint32_t ulMarker;
+#endif
+#if (configSYSTEM_HEAP_STATS == 1)
+    TaskHandle_t xAllocatingTask;
+    TickType_t xTimeAllocated;
+    struct A_BLOCK_LINK *pxNextTakenBlock, *pxPrevTakenBlock;
+#endif
 } BlockLink_t;
+
+/* Heap integrity markers */
+#if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+static const uint32_t ulMarkerAllocated   = 0xabababab;
+static const uint32_t ulMarkerUnallocated = 0xcdcdcdcd;
+static const uint32_t ulMarkerFreed       = 0xdddddddd;
+static const uint32_t ulMarkerSpecial     = 0xbaadc0de;
+#endif
 
 /*-----------------------------------------------------------*/
 
@@ -124,6 +148,11 @@ static const size_t xHeapStructSize = ( sizeof( BlockLink_t ) + ( ( size_t ) ( p
 
 /* Create a couple of list links to mark the start and end of the list. */
 PRIVILEGED_DATA static BlockLink_t xStart, * pxEnd = NULL;
+
+/* Start/end of used blocks list */
+#if (configSYSTEM_HEAP_STATS == 1)
+static BlockLink_t xTakenEnd;
+#endif
 
 /* Keeps track of the number of calls to allocate and free memory as well as the
  * number of free bytes remaining, but says nothing about fragmentation. */
@@ -197,6 +226,11 @@ void * pvPortMalloc( size_t xWantedSize )
                  * was not found. */
                 if( pxBlock != pxEnd )
                 {
+                    /* check block integrity */
+                    #if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+                        configASSERT((pxBlock->ulMarker == ulMarkerUnallocated) || (pxBlock->ulMarker == ulMarkerFreed));
+                    #endif
+
                     /* Return the memory space pointed to - jumping over the
                      * BlockLink_t structure at its start. */
                     pvReturn = ( void * ) ( ( ( uint8_t * ) pxPreviousBlock->pxNextFreeBlock ) + xHeapStructSize );
@@ -215,6 +249,11 @@ void * pvPortMalloc( size_t xWantedSize )
                          * compiler. */
                         pxNewBlockLink = ( void * ) ( ( ( uint8_t * ) pxBlock ) + xWantedSize );
                         configASSERT( ( ( ( size_t ) pxNewBlockLink ) & portBYTE_ALIGNMENT_MASK ) == 0 );
+
+                        /* mark new block as unallocated */
+                        #if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+                            pxNewBlockLink->ulMarker = ulMarkerUnallocated;
+                        #endif
 
                         /* Calculate the sizes of two blocks split from the
                          * single block. */
@@ -239,6 +278,21 @@ void * pvPortMalloc( size_t xWantedSize )
                     {
                         mtCOVERAGE_TEST_MARKER();
                     }
+
+                    #if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+                        pxBlock->ulMarker = ulMarkerAllocated;
+                    #endif
+                    #if (configSYSTEM_HEAP_STATS == 1)
+                        /* Push taken block at the end of the taken list */
+                        xTakenEnd.pxPrevTakenBlock->pxNextTakenBlock = pxBlock;
+                        pxBlock->pxPrevTakenBlock                    = xTakenEnd.pxPrevTakenBlock;
+                        pxBlock->pxNextTakenBlock                    = &xTakenEnd;
+                        xTakenEnd.pxPrevTakenBlock                   = pxBlock;
+
+                        /* Update block stats */
+                        pxBlock->xTimeAllocated  = xTaskGetTickCount();
+                        pxBlock->xAllocatingTask = xTaskGetCurrentTaskHandle();
+                    #endif
 
                     /* The block is being returned - it is allocated and owned
                      * by the application and has no "next" block. */
@@ -298,6 +352,11 @@ void vPortFree( void * pv )
         /* This casting is to keep the compiler from issuing warnings. */
         pxLink = ( void * ) puc;
 
+        /* integrity check */
+        #if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+            configASSERT(pxLink->ulMarker == ulMarkerAllocated);
+        #endif
+
         configASSERT( heapBLOCK_IS_ALLOCATED( pxLink ) != 0 );
         configASSERT( pxLink->pxNextFreeBlock == NULL );
 
@@ -308,6 +367,9 @@ void vPortFree( void * pv )
                 /* The block is being returned to the heap - it is no longer
                  * allocated. */
                 heapFREE_BLOCK( pxLink );
+                #if configSYSTEM_HEAP_INTEGRITY_CHECK == 1
+                    pxLink->ulMarker = ulMarkerFreed;
+                #endif
                 #if ( configHEAP_CLEAR_MEMORY_ON_FREE == 1 )
                 {
                     ( void ) memset( puc + xHeapStructSize, 0, pxLink->xBlockSize - xHeapStructSize );
@@ -321,6 +383,13 @@ void vPortFree( void * pv )
                     traceFREE( pv, pxLink->xBlockSize );
                     prvInsertBlockIntoFreeList( ( ( BlockLink_t * ) pxLink ) );
                     xNumberOfSuccessfulFrees++;
+                    #if (configSYSTEM_HEAP_STATS == 1)
+                        /* Update taken list */
+                        pxLink->pxPrevTakenBlock->pxNextTakenBlock = pxLink->pxNextTakenBlock;
+                        pxLink->pxNextTakenBlock->pxPrevTakenBlock = pxLink->pxPrevTakenBlock;
+                        pxLink->pxPrevTakenBlock                   = NULL;
+                        pxLink->pxNextTakenBlock                   = NULL;
+                    #endif
                 }
                 ( void ) xTaskResumeAll();
             }
@@ -398,6 +467,30 @@ static void prvHeapInit( void ) /* PRIVILEGED_FUNCTION */
     xStart.pxNextFreeBlock = ( void * ) pucAlignedHeap;
     xStart.xBlockSize = ( size_t ) 0;
 
+#if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+    xStart.ulMarker = ulMarkerSpecial;
+#endif
+
+#if (configSYSTEM_HEAP_STATS == 1)
+    /* Initialize start of list of taken blocks */
+    xStart.pxNextTakenBlock = &xTakenEnd;
+    xStart.pxPrevTakenBlock = NULL;
+    xStart.xTimeAllocated   = 0;
+    xStart.xAllocatingTask  = 0;
+
+    /* Initialize end of list of taken blocks */
+    xTakenEnd.pxNextFreeBlock  = NULL;
+    xTakenEnd.xBlockSize	   = 0;
+    xTakenEnd.pxNextTakenBlock = NULL;
+    xTakenEnd.pxPrevTakenBlock = &xStart;
+    xTakenEnd.xTimeAllocated   = 0;
+    xTakenEnd.xAllocatingTask  = 0;
+
+#if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+    xTakenEnd.ulMarker = ulMarkerSpecial;
+#endif
+#endif
+
     /* pxEnd is used to mark the end of the list of free blocks and is inserted
      * at the end of the heap space. */
     uxAddress = ( ( size_t ) pucAlignedHeap ) + xTotalHeapSize;
@@ -412,6 +505,9 @@ static void prvHeapInit( void ) /* PRIVILEGED_FUNCTION */
     pxFirstFreeBlock = ( void * ) pucAlignedHeap;
     pxFirstFreeBlock->xBlockSize = uxAddress - ( size_t ) pxFirstFreeBlock;
     pxFirstFreeBlock->pxNextFreeBlock = pxEnd;
+#if (configSYSTEM_HEAP_INTEGRITY_CHECK == 1)
+    pxFirstFreeBlock->ulMarker = ulMarkerUnallocated;
+#endif
 
     /* Only one block exists - and it covers the entire usable heap space. */
     xMinimumEverFreeBytesRemaining = pxFirstFreeBlock->xBlockSize;

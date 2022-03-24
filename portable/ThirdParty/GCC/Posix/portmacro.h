@@ -1,5 +1,5 @@
 /*
- * FreeRTOS Kernel <DEVELOPMENT BRANCH>
+ * FreeRTOS Kernel V10.4.6
  * Copyright 2020 Cambridge Consultants Ltd.
  *
  * SPDX-License-Identifier: MIT
@@ -60,8 +60,8 @@ typedef portSTACK_TYPE StackType_t;
 typedef long BaseType_t;
 typedef unsigned long UBaseType_t;
 
-typedef unsigned long TickType_t;
-#define portMAX_DELAY ( TickType_t ) ULONG_MAX
+typedef uint32_t TickType_t;
+#define portMAX_DELAY ( TickType_t ) UINT32_MAX
 
 #define portTICK_TYPE_IS_ATOMIC 1
 
@@ -127,6 +127,9 @@ extern void vPortCancelThread( void *pxTaskToDelete );
 extern unsigned long ulPortGetRunTime( void );
 #define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() /* no-op */
 #define portGET_RUN_TIME_COUNTER_VALUE()         ulPortGetRunTime()
+
+BaseType_t xPortIsInsideInterrupt(void);
+uint32_t ulHighFrequencyTimerTicks(void);
 
 #ifdef __cplusplus
 }

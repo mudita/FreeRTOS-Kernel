@@ -33,7 +33,9 @@
 /* Scheduler includes. */
 #include "FreeRTOS.h"
 #include "task.h"
+#include <setjmp.h>
 
+static jmp_buf xJumpBuf;
 #ifndef __VFP_FP__
     #error This port can only be used when the project options are configured to enable hardware floating point support.
 #endif
@@ -106,12 +108,15 @@
     #define portTASK_RETURN_ADDRESS    prvTaskExitError
 #endif
 
+#define portNESTING_START_VALUE 0xaaaaaaaa
+
 /*
  * Setup the timer to generate the tick interrupts.  The implementation in this
  * file is weak to allow application writers to change the timer used to
  * generate the tick interrupt.
  */
 void vPortSetupTimerInterrupt( void );
+extern void vPortStopTimerInterrupt( void );
 
 /*
  * Exception handlers.
@@ -139,7 +144,7 @@ static void prvTaskExitError( void );
 
 /* Each task maintains its own interrupt status in the critical nesting
  * variable. */
-static UBaseType_t uxCriticalNesting = 0xaaaaaaaa;
+static UBaseType_t uxCriticalNesting = portNESTING_START_VALUE;
 
 /*
  * The number of SysTick increments that make up one tick period.
@@ -241,19 +246,28 @@ static void prvTaskExitError( void )
 void vPortSVCHandler( void )
 {
     __asm volatile (
-        "	ldr	r3, pxCurrentTCBConst2		\n"/* Restore the context. */
-        "	ldr r1, [r3]					\n"/* Use pxCurrentTCBConst to get the pxCurrentTCB address. */
-        "	ldr r0, [r1]					\n"/* The first item in pxCurrentTCB is the task top of stack. */
-        "	ldmia r0!, {r4-r11, r14}		\n"/* Pop the registers that are not automatically saved on exception entry and the critical nesting count. */
-        "	msr psp, r0						\n"/* Restore the task stack pointer. */
-        "	isb								\n"
-        "	mov r0, #0 						\n"
-        "	msr	basepri, r0					\n"
-        "	bx r14							\n"
-        "									\n"
-        "	.align 4						\n"
-        "pxCurrentTCBConst2: .word pxCurrentTCB				\n"
-        );
+        "   tst lr, #0x04                   \n" /* Extract SVC number from the opcode */
+        "   ite eq                          \n"
+        "   mrseq r0, MSP                   \n"
+        "   mrsne r0, PSP                   \n"
+        "   ldr r0, [r0, #24]               \n"
+        "   sub r0, r0, #2                  \n"
+        "   ldrb r0, [r0]                   \n"
+        "   cmp r0, #0                      \n" /* Check if SVC #0 */
+        "   bne _StackTrace_Dump_svc_1       \n" /* Nono zero value go to the dump backtrace */
+        "   ldr r3, pxCurrentTCBConst2      \n" /* On SVC #0 Restore the context and start OS. */
+        "   ldr r1, [r3]                    \n" /* Use pxCurrentTCBConst to get the pxCurrentTCB address. */
+        "   ldr r0, [r1]                    \n" /* The first item in pxCurrentTCB is the task top of stack. */
+        "   ldmia r0!, {r4-r11, r14}        \n" /* Pop the registers that are not automatically saved on exception entry and the critical nesting count. */
+        "   msr psp, r0                     \n" /* Restore the task stack pointer. */
+        "   isb                             \n"
+        "   mov r0, #0                      \n"
+        "   msr basepri, r0                 \n"
+        "   bx r14                          \n"
+        "                                   \n"
+        "   .align 4                        \n"
+        "pxCurrentTCBConst2: .word pxCurrentTCB             \n"
+    );
 }
 /*-----------------------------------------------------------*/
 
@@ -370,6 +384,11 @@ BaseType_t xPortStartScheduler( void )
     /* Lazy save always. */
     *( portFPCCR ) |= portASPEN_AND_LSPEN_BITS;
 
+    if(setjmp(xJumpBuf) != 0 ) {
+        /* When back while the scheduler ends */
+        return 1;
+    }
+
     /* Start the first task. */
     prvPortStartFirstTask();
 
@@ -389,9 +408,10 @@ BaseType_t xPortStartScheduler( void )
 
 void vPortEndScheduler( void )
 {
-    /* Not implemented in ports where there is nothing to return to.
-     * Artificially force an assert. */
-    configASSERT( uxCriticalNesting == 1000UL );
+    vPortStopTimerInterrupt();
+    uxCriticalNesting = portNESTING_START_VALUE;
+    portENABLE_INTERRUPTS();
+    longjmp(xJumpBuf, 1);
 }
 /*-----------------------------------------------------------*/
 
