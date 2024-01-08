@@ -1323,6 +1323,13 @@ TickType_t xTimerGetPeriod( TimerHandle_t xTimer ) PRIVILEGED_FUNCTION;
  */
 TickType_t xTimerGetExpiryTime( TimerHandle_t xTimer ) PRIVILEGED_FUNCTION;
 
+/**
+ * TickType_t xTimerGetNextWakeUpTime( void );
+ *
+ * Returns the time in ticks after which the task will wake up from the blocked state.
+ */
+TickType_t xTimerGetNextWakeUpTime( void ) PRIVILEGED_FUNCTION;
+
 /*
  * Functions beyond this part are not part of the public API and are intended
  * for use by the kernel only.

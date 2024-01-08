@@ -148,6 +148,11 @@
 /*-----------------------------------------------------------*/
 
 /*
+* the time at which the next timer will expire
+*/
+    static TickType_t xNextWakeUpTime;
+
+/*
  * Initialise the infrastructure used by the timer service task if it has not
  * been initialised already.
  */
@@ -567,7 +572,6 @@
 
     static portTASK_FUNCTION( prvTimerTask, pvParameters )
     {
-        TickType_t xNextExpireTime;
         BaseType_t xListWasEmpty;
 
         /* Just to avoid compiler warnings. */
@@ -589,11 +593,11 @@
         {
             /* Query the timers list to see if it contains any timers, and if so,
              * obtain the time at which the next timer will expire. */
-            xNextExpireTime = prvGetNextExpireTime( &xListWasEmpty );
+            xNextWakeUpTime = prvGetNextExpireTime( &xListWasEmpty );
 
             /* If a timer has expired, process it.  Otherwise, block this task
              * until either a timer does expire, or a command is received. */
-            prvProcessTimerOrBlockTask( xNextExpireTime, xListWasEmpty );
+            prvProcessTimerOrBlockTask( xNextWakeUpTime, xListWasEmpty );
 
             /* Empty the command queue. */
             prvProcessReceivedCommands();
@@ -1116,6 +1120,11 @@
         }
 
     #endif /* configUSE_TRACE_FACILITY */
+/*-----------------------------------------------------------*/
+    TickType_t xTimerGetNextWakeUpTime( void )
+    {
+        return xNextWakeUpTime;
+    }
 /*-----------------------------------------------------------*/
 
 /* This entire source file will be skipped if the application is not configured
